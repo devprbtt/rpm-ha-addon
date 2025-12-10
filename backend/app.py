@@ -4072,15 +4072,12 @@ def delete_cena(cena_id):
     return jsonify({"ok": True})
 
 
-@app.route("/", defaults={"path": ""})
-@app.route("/<path:path>")
-def spa_catch_all(path):
-    # Não intercepta APIs ou arquivos estáticos
-    if path.startswith("api/") or path.startswith("exportar-pdf/"):
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def catch_all(path):
+    if path.startswith("api/"):
         abort(404)
-    if os.path.exists(os.path.join(app.static_folder, path)):
-        return send_from_directory(app.static_folder, path)
-    return send_from_directory(app.static_folder, "index.html")
+    return send_from_directory(app.static_folder, 'index.html')
 
 
 if __name__ == '__main__':
