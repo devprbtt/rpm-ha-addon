@@ -1,0 +1,19 @@
+#!/usr/bin/with-contenv bashio
+# ==============================================================================
+# Home Assistant Community Add-on: Roehn Automacao
+#
+# This script starts the application.
+# ==============================================================================
+
+bashio::log.info "Starting Roehn Automacao..."
+
+# Ensure we are in the application directory
+cd /app
+
+# Set Flask environment variables
+export FLASK_APP=app.py
+export FLASK_ENV=production
+export INSTANCE_PATH=/data
+
+# Start the application (Flask auto-creates the SQLite DB under INSTANCE_PATH)
+exec python3 -m flask run --host=0.0.0.0 --port=5000

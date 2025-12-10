@@ -1,0 +1,446 @@
+import React, { useEffect, useState, useMemo } from "react"; // Adicione useMemo
+import { Navigate, useLocation } from "react-router-dom";
+import { useAuth } from "@/store/auth";
+import { useProject } from "@/store/project";
+import Layout from "../components/Layout";
+import CreateProjectForm from "@/components/dashboard/CreateProjectForm";
+import ProjectGrid from "@/components/dashboard/ProjectGrid";
+import CurrentProjectAlert from "@/components/dashboard/CurrentProjectAlert";
+import ImportProjectSection from "@/components/dashboard/ImportProjectSection";
+import NavigationGuide from "@/components/dashboard/NavigationGuide";
+import type { Project, ProjectStatus } from '@/types/project';
+import { useToast } from "@/components/ui/use-toast";
+
+import { Download, Plus, Search, Filter, Upload } from "lucide-react";
+
+
+const Dashboard: React.FC = () => {
+  const { toast } = useToast();
+  const location = useLocation();
+  const { user, loading: authLoading, fetchSession } = useAuth();
+  const { setProjeto, clearProjeto } = useProject();
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [currentProject, setCurrentProject] = useState<Project | undefined>();
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isImportingPlanner, setIsImportingPlanner] = useState(false);
+
+  // Novos estados para busca e filtro
+  const [searchTerm, setSearchTerm] = useState("");
+  const [statusFilter, setStatusFilter] = useState<ProjectStatus | "TODOS">("TODOS");
+
+  // Filtrar projetos baseado na busca e filtro de status
+  const filteredProjects = useMemo(() => {
+    return projects.filter(project => {
+      const matchesSearch = project.nome.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesStatus = statusFilter === "TODOS" || project.status === statusFilter;
+      return matchesSearch && matchesStatus;
+    });
+  }, [projects, searchTerm, statusFilter]);
+
+  // Carregar projetos e projeto atual
+  const loadProjects = async () => {
+    setIsLoading(true);
+    try {
+      const projRes = await fetch("/api/projetos", { credentials: "include" });
+      const projData = await projRes.json();
+      if (projData.ok && Array.isArray(projData.projetos)) {
+        setProjects(
+          projData.projetos.map((p: any) => ({
+            id: p.id,
+            nome: p.nome,
+            status: (p.status ?? 'ATIVO') as ProjectStatus,
+            selected: !!p.selected,
+            data_criacao: p.data_criacao,
+            data_ativo: p.data_ativo,
+            data_inativo: p.data_inativo,
+            data_concluido: p.data_concluido,
+          }))
+        );
+      }
+
+      // Buscar o projeto atual
+      const currentRes = await fetch("/api/projeto_atual", { credentials: "include" });
+      const currentData = await currentRes.json();
+      if (currentData.ok && currentData.projeto_atual) {
+        const p = currentData.projeto_atual;
+        const currentProjectData = {
+          id: p.id,
+          nome: p.nome,
+          status: (p.status ?? 'ATIVO') as ProjectStatus,
+          selected: true, // Se existe um projeto atual, ele está selecionado
+          data_criacao: p.data_criacao,
+          data_ativo: p.data_ativo,
+          data_inativo: p.data_inativo,
+          data_concluido: p.data_concluido,
+        };
+        setCurrentProject(currentProjectData);
+        setProjeto(currentProjectData);
+      } else {
+        setCurrentProject(undefined);
+        clearProjeto();
+      }
+    } catch (error) {
+      // Trate o erro se necessário
+    }
+    setIsLoading(false);
+  };
+
+  useEffect(() => {
+    // garante que a sessão foi checada quando entrar na página
+    fetchSession();
+  }, [fetchSession]);
+  
+  useEffect(() => {
+    if (user) {
+      loadProjects();
+    }
+  }, [user, authLoading]);
+
+  // Função para exportar projeto em JSON
+  const handleExportProject = async () => {
+    if (!currentProject) return;
+    
+    setIsExporting(true);
+    try {
+      // CORREÇÃO: Usar a rota correta do backend sem o prefixo /api/
+      const response = await fetch(`/exportar-projeto/${currentProject.id}`, {
+        credentials: "include",
+      });
+      
+      if (response.ok) {
+        // Obter o nome do arquivo do header Content-Disposition
+        const contentDisposition = response.headers.get('Content-Disposition');
+        let filename = `projeto_${currentProject.nome}_${new Date().toISOString().split('T')[0]}.json`;
+        
+        if (contentDisposition) {
+          const filenameMatch = contentDisposition.match(/filename="(.+)"/);
+          if (filenameMatch) {
+            filename = filenameMatch[1];
+          }
+        }
+        
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.style.display = "none";
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+      } else {
+        console.error("Falha ao exportar projeto");
+        alert("Erro ao exportar projeto. Verifique se o projeto existe e tente novamente.");
+      }
+    } catch (error) {
+      console.error("Erro ao exportar projeto:", error);
+      alert("Erro ao exportar projeto. Tente novamente.");
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleImportPlanner = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    setIsImportingPlanner(true);
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const response = await fetch("/api/importar-planner", {
+        method: "POST",
+        credentials: "include",
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.ok) {
+        alert(data.message || "Projeto importado com sucesso!");
+        await loadProjects(); // Recarrega os projetos para refletir o novo projeto importado
+      } else {
+        alert(`Erro ao importar: ${data.error}` || "Ocorreu um erro desconhecido.");
+      }
+    } catch (error) {
+      console.error("Erro ao importar do planner:", error);
+      alert("Erro de conexão ao tentar importar o projeto do planner.");
+    } finally {
+      setIsImportingPlanner(false);
+      // Reset the input value to allow re-uploading the same file
+      event.target.value = '';
+    }
+  };
+
+  // Criar novo projeto
+  const handleProjectCreated = async (formData: { name: string; description?: string; status: string; controlador: string; }) => {
+    setIsLoading(true);
+    try {
+      const res = await fetch("/api/projetos", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nome: formData.name, controlador: formData.controlador }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        // Em vez de atualizar o estado manualmente, recarregamos tudo do servidor.
+        // Isso é mais simples e confiável, e garante que o projeto recém-criado
+        // (que o backend já define como atual) seja refletido corretamente na UI.
+        await loadProjects();
+        toast({
+          title: `Projeto '${formData.name}' criado com sucesso!`,
+          description: "Agora você pode começar a adicionar áreas e ambientes.",
+        });
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Erro ao criar projeto",
+          description: data.error || "Ocorreu um erro desconhecido.",
+        });
+      }
+    } catch (error) {
+      console.error("Erro ao criar projeto:", error);
+      toast({
+        variant: "destructive",
+        title: "Erro de Conexão",
+        description: "Não foi possível conectar ao servidor para criar o projeto.",
+      });
+    } finally {
+      setShowCreateForm(false);
+      setIsLoading(false);
+    }
+  };
+
+  // Selecionar projeto
+  const handleSelectProject = async (project: Project) => {
+    setIsLoading(true);
+    try {
+      await fetch("/api/projeto_atual", {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projeto_id: project.id }),
+      });
+      setProjeto(project); // Sincroniza com o store global
+      
+      // Atualiza localmente sem recarregar tudo
+      // depois do fetch PUT, ao atualizar localmente
+      setProjects(prev =>
+        prev.map(p => ({
+          ...p,
+          selected: p.id === project.id,
+        }))
+      );
+      // e garantir currentProject com status e datas:
+      setCurrentProject({
+        ...project,
+        selected: true,
+      });
+
+    } catch (error) {}
+    setIsLoading(false);
+  };
+
+  // Excluir projeto
+  const handleDeleteProject = async (projectId: number) => {
+    setIsLoading(true);
+    try {
+      await fetch(`/api/projetos/${projectId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      
+      // Se era o projeto atual, limpa a seleção
+      if (currentProject?.id === projectId) {
+        clearProjeto(); // Sincroniza com o store global
+        setCurrentProject(undefined);
+      }
+
+      // Atualiza localmente sem recarregar tudo
+      setProjects(prev => prev.filter(p => p.id !== projectId));
+    } catch (error) {}
+    setIsLoading(false);
+  };
+
+  // Atualizar projeto (nome e/ou status)
+  const handleUpdateProject = async (projectId: number, data: Partial<Project>) => {
+    const response = await fetch(`/api/projetos/${projectId}`, {
+      method: "PUT",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        nome: data.nome,
+        status: data.status,
+      }),
+    });
+
+    const result = await response.json();
+
+    if (result.ok && result.projeto) {
+      const updatedProject = {
+        ...result.projeto,
+        selected: currentProject?.id === projectId,
+      };
+
+      // Atualiza a lista
+      setProjects(prev =>
+        prev.map(p => (p.id === projectId ? updatedProject : p))
+      );
+
+      // Atualiza o projeto atual se for ele
+      if (currentProject?.id === projectId) {
+        setCurrentProject(updatedProject);
+      }
+    }
+  };
+
+
+
+  if (authLoading) {
+    return (
+      <Layout>
+        <div className="min-h-[60vh] grid place-items-center">
+          <div className="flex items-center gap-3 text-muted-foreground">
+            <span className="animate-spin inline-block h-5 w-5 rounded-full border-2 border-border border-t-slate-600" />
+            Verificando sessão...
+          </div>
+        </div>
+      </Layout>
+    );
+  }
+  // Se não logado, redireciona para login e guarda a rota atual
+  if (!user) {
+    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  }  
+  return (
+    <Layout>
+      <div className="max-w-7xl mx-auto px-6 py-8">
+        {/* Header */}
+        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6 mb-10">
+          <div>
+            <h1 className="text-4xl font-bold text-foreground mb-2">
+              Gerenciador de Projetos
+            </h1>
+            <p className="text-lg text-muted-foreground max-w-2xl">
+              Gerencie seus projetos com automação ROEHN. Cadastre ambientes, areas, circuitos e módulos e gere um relatório completo.
+            </p>
+          </div>
+          <div className="flex flex-col sm:flex-row gap-3">
+            {currentProject && (
+              <button
+                onClick={handleExportProject}
+                disabled={isExporting}
+                className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-300 flex items-center gap-3 disabled:opacity-50"
+              >
+                <Download className="w-5 h-5" />
+                {isExporting ? 'Exportando...' : 'Exportar JSON'}
+              </button>
+            )}
+            {/* Botão de Importar do Planner */}
+            <label className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-300 flex items-center gap-3 cursor-pointer disabled:opacity-50">
+              <Upload className="w-5 h-5" />
+              {isImportingPlanner ? 'Importando...' : 'Importar do Planner'}
+              <input
+                type="file"
+                className="hidden"
+                accept=".json"
+                onChange={handleImportPlanner}
+                disabled={isImportingPlanner}
+              />
+            </label>
+            <button
+              onClick={() => setShowCreateForm(true)}
+              className="bg-primary hover:bg-primary/90 text-white px-8 py-3 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-300 flex items-center gap-3"
+            >
+              <Plus className="w-5 h-5" />
+              Novo Projeto
+            </button>
+          </div>
+        </div>
+
+        {/* Current Project Alert */}
+        <CurrentProjectAlert currentProject={currentProject} />
+
+        {/* Create Project Form */}
+        {showCreateForm && (
+          <CreateProjectForm 
+            onSubmit={handleProjectCreated}
+            onCancel={() => setShowCreateForm(false)}
+          />
+        )}
+
+        {/* Search and Filter Bar */}
+        <div className="mb-8 bg-card rounded-2xl p-6 shadow-sm border border-border">
+          <div className="flex flex-col md:flex-row gap-4">
+            {/* Search Input */}
+            <div className="flex-1 relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-5 h-5" />
+              <input
+                type="text"
+                placeholder="Buscar projetos por nome..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-10 pr-4 py-3 border border-border bg-background/80 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-transparent"
+              />
+            </div>
+            
+            {/* Status Filter */}
+            <div className="flex gap-2 items-center">
+              <Filter className="text-muted-foreground w-5 h-5" />
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as ProjectStatus | "TODOS")}
+                className="px-4 py-3 border border-border bg-background/80 text-foreground rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-transparent"
+              >
+                <option value="TODOS">Todos os status</option>
+                <option value="ATIVO">Ativo</option>
+                <option value="INATIVO">Inativo</option>
+                <option value="CONCLUIDO">Concluído</option>
+              </select>
+            </div>
+          </div>
+          
+          {/* Results Counter */}
+          <div className="mt-4 text-sm text-muted-foreground">
+            {filteredProjects.length} de {projects.length} projetos encontrados
+            {searchTerm && (
+              <span> para "{searchTerm}"</span>
+            )}
+            {statusFilter !== "TODOS" && (
+              <span> com status {statusFilter.toLowerCase()}</span>
+            )}
+          </div>
+        </div>
+
+        {/* Projects Grid - Agora com scroll quando necessário */}
+        <div className="mb-12 max-h-[70vh] overflow-y-auto pr-2">
+          <ProjectGrid
+            projects={filteredProjects}
+            currentProject={currentProject}
+            isLoading={isLoading}
+            onSelectProject={handleSelectProject}
+            onDeleteProject={handleDeleteProject}
+            onUpdateProject={(projectId, data: Partial<Project>) =>
+              handleUpdateProject(projectId, data)
+            }
+          />
+        </div>
+
+        {/* Import Section */}
+        <ImportProjectSection onProjectImported={loadProjects} />
+
+        {/* Navigation Guide - REMOVED */}
+        {/* {currentProject && <NavigationGuide />} */}
+      </div>
+    </Layout>
+  );
+};
+
+export default Dashboard;
